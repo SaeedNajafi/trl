@@ -280,10 +280,11 @@ class OnlineDPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature,
-                top_k=50,
-                top_p=1.0,
+                top_p=0.9,
                 do_sample=True,
                 use_cache=False if args.gradient_checkpointing else True,
+                pad_token_id=processing_class.pad_token_id,
+                eos_token_id=processing_class.eos_token_id,
             )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
@@ -341,7 +342,7 @@ class OnlineDPOTrainer(Trainer):
     def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> dict[str, Any]:
         """Tokenize a single row from a DPO specific dataset."""
         if not is_encoder_decoder:
-            batch = tokenizer(feature["prompt"], add_special_tokens=False)
+            batch = tokenizer(feature, add_special_tokens=False)
             # Add BOS token to head of prompt. Avoid adding if it's already there
             if tokenizer.bos_token_id is not None:
                 prompt_len_input_ids = len(batch["input_ids"])
@@ -349,7 +350,7 @@ class OnlineDPOTrainer(Trainer):
                     batch["input_ids"] = [tokenizer.bos_token_id] + batch["input_ids"]
                     batch["attention_mask"] = [1] + batch["attention_mask"]
         else:
-            batch = tokenizer(feature["prompt"], add_special_tokens=True)
+            batch = tokenizer(feature, add_special_tokens=True)
         batch = {f"prompt_{key}": value for key, value in batch.items()}
         return batch
 
@@ -426,41 +427,41 @@ class OnlineDPOTrainer(Trainer):
 
         return self.accelerator.prepare(eval_dataloader)
 
-    def _generate_vllm(self, model, prompts):
-        eos_token_id = self.processing_class.eos_token_id
-        pad_token_id = self.processing_class.pad_token_id
+    # def _generate_vllm(self, model, prompts):
+    #     eos_token_id = self.processing_class.eos_token_id
+    #     pad_token_id = self.processing_class.pad_token_id
 
-        # Load the latest weights
-        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-        llm_model.load_weights(model.state_dict().items())
+    #     # Load the latest weights
+    #     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+    #     llm_model.load_weights(model.state_dict().items())
 
-        if is_conversational({"prompt": prompts[0]}):
-            outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
-        else:
-            outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
+    #     if is_conversational({"prompt": prompts[0]}):
+    #         outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+    #     else:
+    #         outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
 
-        completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
-        prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+    #     completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
+    #     prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
 
-        # Create mask and pad the prompt and completion
-        max_prompt_length = max(len(ids) for ids in prompt_ids)
-        prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
-        prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
-        max_tokens = self.generation_config.max_tokens
-        completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
-        completion_ids = [
-            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
-            for ids in completion_ids
-        ]
-        completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
+    #     # Create mask and pad the prompt and completion
+    #     max_prompt_length = max(len(ids) for ids in prompt_ids)
+    #     prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
+    #     prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
+    #     max_tokens = self.generation_config.max_tokens
+    #     completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
+    #     completion_ids = [
+    #         ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
+    #         for ids in completion_ids
+    #     ]
+    #     completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
 
-        # Convert to tensors
-        prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
-        prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
-        completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
-        completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
+    #     # Convert to tensors
+    #     prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
+    #     prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
+    #     completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
+    #     completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
 
-        return prompt_ids, prompt_mask, completion_ids, completion_mask
+    #     return prompt_ids, prompt_mask, completion_ids, completion_mask
 
     def _generate(self, model, prompts):
         eos_token_id = self.processing_class.eos_token_id
@@ -468,15 +469,23 @@ class OnlineDPOTrainer(Trainer):
 
         # Apply chat template and tokenize the input. We do this on-the-fly to enable the use of reward models and
         # policies with different tokenizers / chat templates.
-        inputs = [{"prompt": prompt} for prompt in prompts]
-        inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
-        inputs = [self.tokenize_row(x, model.config.is_encoder_decoder, self.processing_class) for x in inputs]
+        # inputs = [{"role": prompt} for prompt in prompts]
+
+        # inputs = [maybe_apply_chat_template(x, self.processing_class) for x in prompts]
+        inputs = prompts
+        if hasattr(model.config, "is_encoder_decoder") and model.config.is_encoder_decoder:
+            is_encoder_decoder = True
+        else:
+            is_encoder_decoder = False
+        inputs = [self.tokenize_row(x, is_encoder_decoder, self.processing_class) for x in inputs]
         inputs = self.data_collator(inputs)
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
         prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
+        print(prompt_ids)
+        print(prompt_mask)
         with unwrap_model_for_generation(
             model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
@@ -518,13 +527,13 @@ class OnlineDPOTrainer(Trainer):
     ) -> torch.Tensor:
         model.train()
 
-        prompts = inputs["prompt"]
+        prompts = inputs["text"]
         batch_size = len(prompts)
 
-        if self.args.use_vllm:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(model, prompts)
-        else:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts)
+        # if self.args.use_vllm:
+        #     prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(model, prompts)
+        # else:
+        prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts)
 
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
 
@@ -571,6 +580,8 @@ class OnlineDPOTrainer(Trainer):
                 examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
                 prompts = [example["prompt"] for example in examples]
                 completions = [example["completion"] for example in examples]
+                print(prompts)
+                print(completions)
 
             # Tokenize the prompts
             prompts_ids = self.reward_processing_class(
@@ -586,9 +597,10 @@ class OnlineDPOTrainer(Trainer):
             # Concatenate the prompts and completions and get the reward
             prompt_completion_ids = torch.cat((prompts_ids, completions_ids), dim=1)
             with torch.inference_mode():
-                _, scores, _ = get_reward(
-                    self.reward_model, prompt_completion_ids, self.reward_processing_class.pad_token_id, context_length
-                )
+                scores = self.reward_model(prompt_completion_ids).score
+                # _, scores, _ = get_reward(
+                #    self.reward_model, prompt_completion_ids, self.reward_processing_class.pad_token_id, context_length
+                # )
 
                 # Filter completion. Ensure that the sample contains stop_token_id
                 # Completions not passing that filter will receive a lower score.
