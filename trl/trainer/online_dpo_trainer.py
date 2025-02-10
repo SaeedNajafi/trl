@@ -18,6 +18,7 @@ import warnings
 from functools import wraps
 from typing import Any, Callable, Optional, Union
 
+import time
 import datasets
 import jinja2
 import numpy as np
@@ -427,41 +428,43 @@ class OnlineDPOTrainer(Trainer):
 
         return self.accelerator.prepare(eval_dataloader)
 
-    # def _generate_vllm(self, model, prompts):
-    #     eos_token_id = self.processing_class.eos_token_id
-    #     pad_token_id = self.processing_class.pad_token_id
+    def _generate_vllm(self, model, prompts):
+        eos_token_id = self.processing_class.eos_token_id
+        pad_token_id = self.processing_class.pad_token_id
 
-    #     # Load the latest weights
-    #     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-    #     llm_model.load_weights(model.state_dict().items())
+        # Load the latest weights
+        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+        llm_model.load_weights(model.state_dict().items())
 
-    #     if is_conversational({"prompt": prompts[0]}):
-    #         outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
-    #     else:
-    #         outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
+        outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
 
-    #     completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
-    #     prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+        # if is_conversational({"prompt": prompts[0]}):
+        #     outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+        # else:
+        #     outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
 
-    #     # Create mask and pad the prompt and completion
-    #     max_prompt_length = max(len(ids) for ids in prompt_ids)
-    #     prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
-    #     prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
-    #     max_tokens = self.generation_config.max_tokens
-    #     completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
-    #     completion_ids = [
-    #         ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
-    #         for ids in completion_ids
-    #     ]
-    #     completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
+        completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
+        prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
 
-    #     # Convert to tensors
-    #     prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
-    #     prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
-    #     completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
-    #     completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
+        # Create mask and pad the prompt and completion
+        max_prompt_length = max(len(ids) for ids in prompt_ids)
+        prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
+        prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
+        max_tokens = self.generation_config.max_tokens
+        completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
+        completion_ids = [
+            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
+            for ids in completion_ids
+        ]
+        completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
 
-    #     return prompt_ids, prompt_mask, completion_ids, completion_mask
+        # Convert to tensors
+        prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
+        prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
+        completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
+        completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
+
+        return prompt_ids, prompt_mask, completion_ids, completion_mask
 
     def _generate(self, model, prompts):
         eos_token_id = self.processing_class.eos_token_id
@@ -484,8 +487,6 @@ class OnlineDPOTrainer(Trainer):
         inputs = self._prepare_inputs(inputs)
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
         prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
-        print(prompt_ids)
-        print(prompt_mask)
         with unwrap_model_for_generation(
             model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
@@ -493,6 +494,7 @@ class OnlineDPOTrainer(Trainer):
                 input_ids=prompt_ids,
                 attention_mask=prompt_mask,
                 generation_config=self.generation_config,
+                use_cache=True,
             )
 
         completion_ids = output[:, prompt_ids.size(1) :]
@@ -530,26 +532,37 @@ class OnlineDPOTrainer(Trainer):
         prompts = inputs["text"]
         batch_size = len(prompts)
 
-        # if self.args.use_vllm:
-        #     prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(model, prompts)
-        # else:
-        prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts)
+        if self.args.use_vllm:
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(model, prompts)
+        else:
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts)
 
+        # start_time = time.time()
+        # print("Generation Time:", time.time() - start_time)
+        # print("\n")
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
 
+        start_time = time.time()
         logprobs = self._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask)
+        # print("Forward with original model Time:", time.time() - start_time)
+        # print("\n")
+
+        start_time = time.time()
         with torch.no_grad():
             if self.ref_model is not None:
                 ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_mask, completion_ids, completion_mask)
             else:  # peft case: we just need to disable the adapter
                 with self.model.disable_adapter():
                     ref_logprobs = self._forward(self.model, prompt_ids, prompt_mask, completion_ids, completion_mask)
+        # print("Forward with reference model Time:", time.time() - start_time)
+        # print("\n")
 
         # Decode the completions, and format them if the input is conversational
         device = logprobs.device
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        if is_conversational({"prompt": prompts[0]}):
-            completions = [[{"role": "assistant", "content": completion}] for completion in completions]
+        # print(completions)
+        # if is_conversational({"prompt": prompts[0]}):
+        completions = [{"prompt": [{"role": "assistant", "content": completion}]} for completion in completions]
 
         # Get the reward from the reward model or judge
         if self.judge is not None:
@@ -572,16 +585,17 @@ class OnlineDPOTrainer(Trainer):
             # when rank == 1, it means the second completion is the best
             mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=device)
         else:
+            start_time = time.time()
             # The reward model may not have the same chat template or tokenizer as the model, so we need to use the
             # raw data (string), apply the chat template (if needed), and tokenize it with the reward processing class.
             prompts = 2 * prompts  # repeat the prompt: [prompt0, prompt1] -> [prompt0, prompt1, prompt0, prompt1]
-            if is_conversational({"prompt": prompts[0]}):
-                examples = [{"prompt": p, "completion": c} for p, c in zip(prompts, completions)]
-                examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
-                prompts = [example["prompt"] for example in examples]
-                completions = [example["completion"] for example in examples]
-                print(prompts)
-                print(completions)
+            # if is_conversational({"prompt": prompts[0]}):
+            #    examples = [{"prompt": p, "completion": c} for p, c in zip(prompts, completions)]
+            #    examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
+            #    prompts = [example["prompt"] for example in examples]
+            #    completions = [example["completion"] for example in examples]
+
+            completions = [apply_chat_template(example, self.reward_processing_class)["prompt"].removeprefix("<|start_header_id|>assistant<|end_header_id|>\n\n") for example in completions]
 
             # Tokenize the prompts
             prompts_ids = self.reward_processing_class(
@@ -601,7 +615,6 @@ class OnlineDPOTrainer(Trainer):
                 # _, scores, _ = get_reward(
                 #    self.reward_model, prompt_completion_ids, self.reward_processing_class.pad_token_id, context_length
                 # )
-
                 # Filter completion. Ensure that the sample contains stop_token_id
                 # Completions not passing that filter will receive a lower score.
                 if self.args.missing_eos_penalty is not None:
@@ -612,6 +625,9 @@ class OnlineDPOTrainer(Trainer):
 
             # Get the indices of the chosen and rejected examples
             mask = first_half >= second_half
+
+        # print("Reward computation Time:", time.time() - start_time)
+        # print("\n")
 
         batch_range = torch.arange(batch_size, device=device)
         chosen_indices = batch_range + (~mask * batch_size)
