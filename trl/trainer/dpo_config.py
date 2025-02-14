@@ -302,6 +302,7 @@ class DPOConfig(TrainingArguments):
             ],
         },
     )
+    average_logps: str = field(default="no")
     beta: float = field(
         default=0.1,
         metadata={

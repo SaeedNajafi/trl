@@ -1249,7 +1249,7 @@ class DPOTrainer(Trainer):
                 torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=0
             )
 
-        if self.loss_type == "ipo":
+        if self.loss_type == "ipo" or self.average_logps == "yes":
             all_logps = all_logps / loss_mask.sum(-1)
 
         output["chosen_logps"] = all_logps[:num_examples]
