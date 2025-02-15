@@ -281,7 +281,7 @@ class OnlineDPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature,
-                top_p=0.9,
+                top_p=0.95,
                 do_sample=True,
                 use_cache=False if args.gradient_checkpointing else True,
                 pad_token_id=processing_class.pad_token_id,
@@ -485,8 +485,11 @@ class OnlineDPOTrainer(Trainer):
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
-        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
-        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
+        prompt_ids = inputs["prompt_input_ids"].repeat(5, 1)
+        print(prompt_ids.size())
+        print(prompt_ids)
+        print("Saeed")
+        prompt_mask = inputs["prompt_attention_mask"].repeat(5, 1)
         with unwrap_model_for_generation(
             model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
@@ -557,6 +560,8 @@ class OnlineDPOTrainer(Trainer):
         # print("Forward with reference model Time:", time.time() - start_time)
         # print("\n")
 
+        print(ref_logprobs.size())
+        print(logprobs.size())
         # Decode the completions, and format them if the input is conversational
         device = logprobs.device
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -588,7 +593,7 @@ class OnlineDPOTrainer(Trainer):
             start_time = time.time()
             # The reward model may not have the same chat template or tokenizer as the model, so we need to use the
             # raw data (string), apply the chat template (if needed), and tokenize it with the reward processing class.
-            prompts = 2 * prompts  # repeat the prompt: [prompt0, prompt1] -> [prompt0, prompt1, prompt0, prompt1]
+            prompts = 5 * prompts  # repeat the prompt: [prompt0, prompt1] -> [prompt0, prompt1, prompt0, prompt1]
             # if is_conversational({"prompt": prompts[0]}):
             #    examples = [{"prompt": p, "completion": c} for p, c in zip(prompts, completions)]
             #    examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
