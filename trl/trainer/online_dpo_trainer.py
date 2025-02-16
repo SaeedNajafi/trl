@@ -624,6 +624,9 @@ class OnlineDPOTrainer(Trainer):
                 # Completions not passing that filter will receive a lower score.
                 if self.args.missing_eos_penalty is not None:
                     scores[~contain_eos_token] -= self.args.missing_eos_penalty
+                    
+                #_, max_indices = torch.max(scores, dim=0, keepdim=True)
+                print(scores)
 
             # Split the scores in 2 (the prompts of the first half are the same as the second half)
             first_half, second_half = scores.split(batch_size)

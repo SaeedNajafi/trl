@@ -427,8 +427,11 @@ class DPOTrainer(Trainer):
             raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
 
         self.beta = args.beta
+        self.average_logps = args.average_logps
+        self.gamma_beta_ratio = self.gamma_beta_ratio
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
+        self.objective_type = self.objective_type
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.use_weighting = args.use_weighting
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
@@ -913,6 +916,43 @@ class DPOTrainer(Trainer):
 
         return output
 
+    def simpo_loss(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """Compute the SimPO loss for a batch of policy model log probabilities.
+
+        Args:
+            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
+            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+
+        Returns:
+            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
+            The losses tensor contains the SimPO loss for each example in the batch.
+            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
+        """
+        pi_logratios = policy_chosen_logps - policy_rejected_logps
+        pi_logratios = pi_logratios.to(self.accelerator.device)
+        logits = pi_logratios - self.gamma_beta_ratio
+
+        if self.loss_type == "sigmoid":
+            losses = (
+                -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
+                - F.logsigmoid(-self.beta * logits) * self.label_smoothing
+            )
+        elif self.loss_type == "hinge":
+            losses = torch.relu(1 - self.beta * logits)
+        else:
+            raise ValueError(
+                f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge']"
+            )
+
+        chosen_rewards = self.beta * policy_chosen_logps.to(self.accelerator.device).detach()
+        rejected_rewards = self.beta * policy_rejected_logps.to(self.accelerator.device).detach()
+
+        return losses, chosen_rewards, rejected_rewards
+
     def dpo_loss(
         self,
         chosen_logps: torch.FloatTensor,
@@ -1294,9 +1334,15 @@ class DPOTrainer(Trainer):
         else:
             ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
 
-        losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-            model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
-        )
+        if self.objective_type == "dpo":
+            losses, chosen_rewards, rejected_rewards = self.dpo_loss(
+                model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
+            )
+        elif self.objective_type == "simpo":
+            losses, chosen_rewards, rejected_rewards = self.simpo_loss(
+                model_output["chosen_logps"], model_output["rejected_logps"]
+            )
+        
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         if self.args.rpo_alpha is not None:

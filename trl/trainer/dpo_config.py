@@ -302,12 +302,28 @@ class DPOConfig(TrainingArguments):
             ],
         },
     )
+    objective_type: str = field(
+        default="dpo",
+        metadata={
+            "help": "Type of objective to use for offline preference optimization.",
+            "choices": [
+                "dpo",
+                "simpo",
+            ],
+        },
+    )
     average_logps: str = field(default="no")
     beta: float = field(
         default=0.1,
         metadata={
             "help": "Parameter controlling the deviation from the reference model. "
             "Higher β means less deviation from the reference model."
+        },
+    )
+    gamma_beta_ratio: float = field(
+        default=0.1,
+        metadata={
+            "help": "Gamma beta ratio used for SimPO."
         },
     )
     f_divergence_type: FDivergenceType = field(
