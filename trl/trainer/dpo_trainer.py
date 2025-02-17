@@ -428,10 +428,10 @@ class DPOTrainer(Trainer):
 
         self.beta = args.beta
         self.average_logps = args.average_logps
-        self.gamma_beta_ratio = self.gamma_beta_ratio
+        self.gamma_beta_ratio = args.gamma_beta_ratio
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
-        self.objective_type = self.objective_type
+        self.objective_type = args.objective_type
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.use_weighting = args.use_weighting
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
@@ -920,7 +920,7 @@ class DPOTrainer(Trainer):
         self,
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the SimPO loss for a batch of policy model log probabilities.
 
         Args:
