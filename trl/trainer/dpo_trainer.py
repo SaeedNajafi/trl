@@ -916,6 +916,38 @@ class DPOTrainer(Trainer):
 
         return output
 
+    def sft_loss(
+        self,
+        chosen_logps: torch.FloatTensor,
+        rejected_logps: torch.FloatTensor,
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """
+        Compute the my SFT loss for a batch of policy and reference model log probabilities.
+
+        Args:
+            chosen_logps (`torch.FloatTensor`):
+                Log probabilities of the model for the chosen responses. Shape: `(batch_size,)`.
+
+            rejected_logps (`torch.FloatTensor`):
+                Log probabilities of the model for the rejected responses. Shape: `(batch_size,)`.
+
+        Returns:
+            A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`.
+            The losses tensor contains the SFT loss for each example in the batch.
+            The `chosen_rewards` and `rejected_rewards` tensors contain the rewards for the chosen and rejected
+            responses, respectively.
+        """
+        device = self.accelerator.device
+
+        chosen_logps = chosen_logps.to(device)
+        rejected_logps = rejected_logps.to(device)
+        losses = -chosen_logps
+
+        chosen_rewards = chosen_logps.detach()
+        rejected_rewards = rejected_logps.detach()
+
+        return losses, chosen_rewards, rejected_rewards
+
     def simpo_loss(
         self,
         policy_chosen_logps: torch.FloatTensor,
@@ -1340,6 +1372,10 @@ class DPOTrainer(Trainer):
             )
         elif self.objective_type == "simpo":
             losses, chosen_rewards, rejected_rewards = self.simpo_loss(
+                model_output["chosen_logps"], model_output["rejected_logps"]
+            )
+        elif self.objective_type == "sft":
+            losses, chosen_rewards, rejected_rewards = self.sft_loss(
                 model_output["chosen_logps"], model_output["rejected_logps"]
             )
         
