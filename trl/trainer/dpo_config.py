@@ -309,6 +309,7 @@ class DPOConfig(TrainingArguments):
             "choices": [
                 "dpo",
                 "simpo",
+                "sft",
             ],
         },
     )
