@@ -327,6 +327,18 @@ class DPOConfig(TrainingArguments):
             "help": "Gamma beta ratio used for SimPO."
         },
     )
+    mmpo_reward_epsilon: float = field(
+        default=1.0,
+        metadata={"help": "epsilon as the chosen text reward."},
+    )
+    mmpo_relu_coefficient: float = field(
+        default=0.1,
+        metadata={"help": "coefficient for the relu part of mmpo loss."},
+    )
+    mmpo_relu_epsilon: float = field(
+        default=0.1,
+        metadata={"help": "margin epsilon for the relu part of mmpo loss."}
+    )
     f_divergence_type: FDivergenceType = field(
         default=FDivergenceType.REVERSE_KL,
         metadata={
