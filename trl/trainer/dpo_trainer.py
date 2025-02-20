@@ -925,7 +925,7 @@ class DPOTrainer(Trainer):
             rejected_logps: torch.FloatTensor,
             ref_chosen_logps: torch.FloatTensor,
             ref_rejected_logps: torch.FloatTensor,
-        ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """
         Compute the MMPO loss for a batch of policy and reference model log probabilities.
 
@@ -944,6 +944,7 @@ class DPOTrainer(Trainer):
             The losses tensor contains the DPO loss for each example in the batch.
             The `chosen_rewards` and `rejected_rewards` tensors contain the rewards for the chosen and rejected
             responses, respectively.
+            The Relu loss.
         """
         device = self.accelerator.device
 
@@ -961,8 +962,9 @@ class DPOTrainer(Trainer):
         rejected_scores = rejected_logps + rejected_rewards
         scores = torch.cat((chosen_scores.unsqueeze(1), rejected_scores.unsqueeze(1)), dim=1)
         losses = -torch.logsumexp(scores, dim=1)
-        losses += self.mmpo_relu_coefficient * F.relu(rejected_scores - chosen_scores + self.mmpo_relu_epsilon)
-        return losses, chosen_rewards.detach(), rejected_rewards.detach()
+        relu_losses = self.mmpo_relu_coefficient * F.relu(rejected_scores - chosen_scores + self.mmpo_relu_epsilon)
+        losses += relu_losses
+        return losses, chosen_rewards.detach(), rejected_rewards.detach(), relu_losses
 
 
     def sft_loss(
@@ -1421,7 +1423,7 @@ class DPOTrainer(Trainer):
             )
 
         elif self.objective_type == "mmpo":
-            losses, chosen_rewards, rejected_rewards = self.mmpo_loss(
+            losses, chosen_rewards, rejected_rewards, relu_losses = self.mmpo_loss(
                 model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
             )
 
@@ -1472,6 +1474,11 @@ class DPOTrainer(Trainer):
         if self.aux_loss_enabled:
             metrics[f"{prefix}aux_loss"] = (
                 self.accelerator.gather_for_metrics(model_output["aux_loss"]).detach().mean().item()
+            )
+        
+        if self.objective_type == "mmpo":
+            metrics[f"{prefix}relu_loss"] = (
+                self.accelerator.gather_for_metrics(relu_losses).detach().mean().item()
             )
 
         return losses.mean(), metrics
