@@ -955,8 +955,8 @@ class DPOTrainer(Trainer):
 
         chosen_ratio = ref_chosen_logps - chosen_logps
         rejected_ratio = ref_rejected_logps - rejected_logps
-        chosen_rewards = self.mmpo_reward_epsilon + self.beta * (1 + chosen_ratio - torch.exp(chosen_ratio))
-        rejected_rewards = self.beta * (1 + rejected_ratio - torch.exp(rejected_ratio))
+        chosen_rewards = (self.mmpo_reward_epsilon + self.beta * (1 + chosen_ratio - torch.exp(chosen_ratio))).detach()
+        rejected_rewards = (self.beta * (1 + rejected_ratio - torch.exp(rejected_ratio))).detach()
 
         chosen_scores = chosen_logps + chosen_rewards
         rejected_scores = rejected_logps + rejected_rewards
@@ -964,7 +964,7 @@ class DPOTrainer(Trainer):
         losses = -torch.logsumexp(scores, dim=1)
         relu_losses = self.mmpo_relu_coefficient * F.relu(rejected_scores - chosen_scores + self.mmpo_relu_epsilon)
         losses += relu_losses
-        return losses, chosen_rewards.detach(), rejected_rewards.detach(), relu_losses
+        return losses, chosen_rewards, rejected_rewards, relu_losses
 
 
     def sft_loss(
@@ -1480,6 +1480,13 @@ class DPOTrainer(Trainer):
             metrics[f"{prefix}relu_loss"] = (
                 self.accelerator.gather_for_metrics(relu_losses).detach().mean().item()
             )
+            metrics[f"{prefix}policy_ratio/chosen"] = (
+                self.accelerator.gather_for_metrics(torch.exp(ref_chosen_logps - model_output["chosen_logps"])).detach().mean().item()
+            )
+            metrics[f"{prefix}policy_ratio/rejected"] = (
+                self.accelerator.gather_for_metrics(torch.exp(ref_rejected_logps - model_output["rejected_logps"])).detach().mean().item()
+            )
+            
 
         return losses.mean(), metrics
 
