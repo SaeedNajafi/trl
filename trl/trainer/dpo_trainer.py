@@ -1011,8 +1011,10 @@ class DPOTrainer(Trainer):
         chosen_ratio = ref_chosen_logps - chosen_logps
         rejected_ratio = ref_rejected_logps - rejected_logps
         
-        chosen_ratio_clamped = torch.clamp(chosen_ratio, max=2.3025851)
-        rejected_ratio_clamped = torch.clamp(rejected_ratio, max=2.3025851)
+        # chosen_ratio_clamped = torch.clamp(chosen_ratio, max=2.3025851)
+        # rejected_ratio_clamped = torch.clamp(rejected_ratio, max=2.3025851)
+        chosen_ratio_clamped = chosen_ratio
+        rejected_ratio_clamped = rejected_ratio
 
         chosen_ratio_exp = torch.exp(chosen_ratio_clamped)
         rejected_ratio_exp = torch.exp(rejected_ratio_clamped)
