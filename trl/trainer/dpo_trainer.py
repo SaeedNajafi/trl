@@ -613,6 +613,9 @@ class DPOTrainer(Trainer):
         ```
         """
         tokenizer = processing_class  # the processing class is a tokenizer
+        print(features)
+        print("Next\n")
+        exit()
         prompt_input_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
         rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
@@ -953,21 +956,24 @@ class DPOTrainer(Trainer):
         rejected_logps = rejected_logps.to(device)
         ref_rejected_logps = ref_rejected_logps.to(device)
 
-        chosen_ratio = ref_chosen_logps - chosen_logps
-        rejected_ratio = ref_rejected_logps - rejected_logps
+        # chosen_ratio = ref_chosen_logps - chosen_logps
+        # rejected_ratio = ref_rejected_logps - rejected_logps
         
-        chosen_ratio_exp = torch.exp(chosen_ratio)
-        rejected_ratio_exp = torch.exp(rejected_ratio)
+        # chosen_ratio_exp = torch.exp(chosen_ratio)
+        # rejected_ratio_exp = torch.exp(rejected_ratio)
 
-        chosen_rewards = self.mmpo_reward_epsilon + self.beta * (1 + chosen_ratio - chosen_ratio_exp)
-        rejected_rewards = self.beta * (1 + rejected_ratio - rejected_ratio_exp)
+        # chosen_rewards = self.mmpo_reward_epsilon + self.beta * (1 + chosen_ratio - chosen_ratio_exp)
+        # rejected_rewards = self.beta * (1 + rejected_ratio - rejected_ratio_exp)
+        
+        chosen_rewards = self.mmpo_reward_epsilon - self.beta * (chosen_logps - ref_chosen_logps)
+        rejected_rewards = -self.beta * (rejected_logps - ref_rejected_logps)
 
         chosen_scores = (chosen_logps + chosen_rewards).detach()
         rejected_scores = (rejected_logps + rejected_rewards).detach()
 
         coeff = F.sigmoid(chosen_scores - rejected_scores)
-        losses = coeff * (1 - self.beta + self.beta * rejected_ratio_exp.detach()) * rejected_logps
-        losses += -(coeff + 1.0) * (1 - self.beta + self.beta * chosen_ratio_exp.detach()) * chosen_logps
+        losses = coeff * (1 - self.beta) * rejected_logps
+        losses += -(coeff + 1.0) * (1 - self.beta) * chosen_logps
         
         # keep the code the same.
         relu_losses = losses - losses
