@@ -613,9 +613,6 @@ class DPOTrainer(Trainer):
         ```
         """
         tokenizer = processing_class  # the processing class is a tokenizer
-        print(features)
-        print("Next\n")
-        exit()
         prompt_input_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
         rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
