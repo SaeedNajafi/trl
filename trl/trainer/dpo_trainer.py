@@ -1150,10 +1150,14 @@ class DPOTrainer(Trainer):
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge']"
             )
 
-        chosen_rewards = self.beta * policy_chosen_logps.to(self.accelerator.device).detach()
-        rejected_rewards = self.beta * policy_rejected_logps.to(self.accelerator.device).detach()
+        # chosen_rewards = self.beta * policy_chosen_logps.to(self.accelerator.device).detach()
+        # rejected_rewards = self.beta * policy_rejected_logps.to(self.accelerator.device).detach()
+        
+        decoding_chosen_rewards = policy_chosen_logps.to(self.accelerator.device).detach()
+        decoding_rejected_rewards = policy_rejected_logps.to(self.accelerator.device).detach()
 
-        return losses, chosen_rewards, rejected_rewards
+        # return losses, chosen_rewards, rejected_rewards
+        return losses, decoding_chosen_rewards, decoding_rejected_rewards
 
     def dpo_loss(
         self,
@@ -1337,10 +1341,18 @@ class DPOTrainer(Trainer):
                 "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', 'apo_down']"
             )
 
-        chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
-        rejected_rewards = self.beta * (rejected_logps.to(device) - ref_rejected_logps.to(device)).detach()
 
-        return losses, chosen_rewards, rejected_rewards
+        # chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
+        # rejected_rewards = self.beta * (rejected_logps.to(device) - ref_rejected_logps.to(device)).detach()
+        # return losses, chosen_rewards, rejected_rewards
+
+        decoding_chosen_rewards = chosen_logps.to(device).detach()
+        decoding_rejected_rewards = rejected_logps.to(device).detach()
+
+        # return losses, chosen_rewards, rejected_rewards
+        return losses, decoding_chosen_rewards, decoding_rejected_rewards
+
+        
 
     def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
