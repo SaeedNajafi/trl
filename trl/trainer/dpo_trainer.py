@@ -960,10 +960,10 @@ class DPOTrainer(Trainer):
         # rejected_ratio_exp = torch.exp(rejected_ratio)
 
         # chosen_rewards = self.mmpo_reward_epsilon + self.beta * (1 + chosen_ratio - chosen_ratio_exp)
-        # rejected_rewards = self.beta * (1 + rejected_ratio - rejected_ratio_exp)
+        # rejected_rewards = 0.1 + self.beta * (1 + rejected_ratio - rejected_ratio_exp)
         
         chosen_rewards = self.mmpo_reward_epsilon - self.beta * (chosen_logps - ref_chosen_logps)
-        rejected_rewards = -self.beta * (rejected_logps - ref_rejected_logps)
+        rejected_rewards = 0.1 - self.beta * (rejected_logps - ref_rejected_logps)
 
         chosen_scores = (chosen_logps + chosen_rewards).detach()
         rejected_scores = (rejected_logps + rejected_rewards).detach()
@@ -974,7 +974,9 @@ class DPOTrainer(Trainer):
         
         # keep the code the same.
         relu_losses = losses - losses
-        return losses, chosen_scores, rejected_scores, relu_losses
+        decoding_chosen_rewards = chosen_logps.detach()
+        decoding_rejected_rewards = rejected_logps.detach()
+        return losses, decoding_chosen_rewards, decoding_rejected_rewards, relu_losses
 
     # def mmpo_loss(
     #         self,
@@ -1013,14 +1015,14 @@ class DPOTrainer(Trainer):
     #     chosen_ratio = ref_chosen_logps - chosen_logps
     #     rejected_ratio = ref_rejected_logps - rejected_logps
         
-    #     chosen_ratio_clamped = torch.clamp(chosen_ratio, max=2.3025851)
-    #     rejected_ratio_clamped = torch.clamp(rejected_ratio, max=2.3025851)
+    #     # chosen_ratio_clamped = torch.clamp(chosen_ratio, max=2.3025851)
+    #     # rejected_ratio_clamped = torch.clamp(rejected_ratio, max=2.3025851)
 
     #     # chosen_ratio_clamped = chosen_ratio
     #     # rejected_ratio_clamped = rejected_ratio
 
-    #     chosen_ratio_exp = torch.exp(chosen_ratio_clamped)
-    #     rejected_ratio_exp = torch.exp(rejected_ratio_clamped)
+    #     # chosen_ratio_exp = torch.exp(chosen_ratio_clamped)
+    #     # rejected_ratio_exp = torch.exp(rejected_ratio_clamped)
 
     #     chosen_rewards = (self.mmpo_reward_epsilon + self.beta * (1 + chosen_ratio_clamped - chosen_ratio_exp)).detach()
     #     rejected_rewards = (self.beta * (1 + rejected_ratio_clamped - rejected_ratio_exp)).detach()
@@ -1070,16 +1072,19 @@ class DPOTrainer(Trainer):
     #     chosen_ratio = chosen_logps - ref_chosen_logps
     #     rejected_ratio = rejected_logps - ref_rejected_logps
 
-    #     chosen_rewards = (self.mmpo_reward_epsilon + self.beta * chosen_ratio).detach()
-    #     rejected_rewards = (self.beta * rejected_ratio).detach()
+    #     chosen_rewards = self.mmpo_reward_epsilon - self.beta * chosen_ratio
+    #     rejected_rewards = 0.1 - self.beta * rejected_ratio
 
-    #     chosen_scores = chosen_logps + chosen_rewards
-    #     rejected_scores = rejected_logps + rejected_rewards
+    #     chosen_scores = chosen_logps + chosen_rewards.detach()
+    #     rejected_scores = rejected_logps + rejected_rewards.detach()
     #     scores = torch.cat((chosen_scores.unsqueeze(1), rejected_scores.unsqueeze(1)), dim=1)
     #     losses = -torch.logsumexp(scores, dim=1)
     #     relu_losses = self.mmpo_relu_coefficient * F.relu(rejected_scores - chosen_scores + self.mmpo_relu_epsilon)
     #     losses += relu_losses
-    #     return losses, chosen_rewards, rejected_rewards, relu_losses
+
+    #     decoding_chosen_rewards = chosen_logps.detach()
+    #     decoding_rejected_rewards = rejected_logps.detach()
+    #     return losses, decoding_chosen_rewards, decoding_rejected_rewards, relu_losses
 
     def sft_loss(
         self,
