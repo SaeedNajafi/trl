@@ -953,30 +953,79 @@ class DPOTrainer(Trainer):
         rejected_logps = rejected_logps.to(device)
         ref_rejected_logps = ref_rejected_logps.to(device)
 
-        # chosen_ratio = ref_chosen_logps - chosen_logps
-        # rejected_ratio = ref_rejected_logps - rejected_logps
-        
-        # chosen_ratio_exp = torch.exp(chosen_ratio)
-        # rejected_ratio_exp = torch.exp(rejected_ratio)
-
-        # chosen_rewards = self.mmpo_reward_epsilon + self.beta * (1 + chosen_ratio - chosen_ratio_exp)
-        # rejected_rewards = 0.1 + self.beta * (1 + rejected_ratio - rejected_ratio_exp)
-        
         chosen_rewards = self.mmpo_reward_epsilon - self.beta * (chosen_logps - ref_chosen_logps)
         rejected_rewards = 0.1 - self.beta * (rejected_logps - ref_rejected_logps)
 
-        chosen_scores = (chosen_logps + chosen_rewards).detach()
-        rejected_scores = (rejected_logps + rejected_rewards).detach()
+        chosen_scores = chosen_logps + chosen_rewards
+        rejected_scores = rejected_logps + rejected_rewards
 
-        coeff = F.sigmoid(chosen_scores - rejected_scores)
-        losses = coeff * (1 - self.beta) * rejected_logps
-        losses += -(coeff + 1.0) * (1 - self.beta) * chosen_logps
-        
-        # keep the code the same.
+        scores = torch.cat((chosen_scores.unsqueeze(1), rejected_scores.unsqueeze(1)), dim=1)
+        losses = -torch.logsumexp(scores, dim=1)
+
         relu_losses = losses - losses
         decoding_chosen_rewards = chosen_logps.detach()
         decoding_rejected_rewards = rejected_logps.detach()
         return losses, decoding_chosen_rewards, decoding_rejected_rewards, relu_losses
+
+
+    # def mmpo_loss(
+    #         self,
+    #         chosen_logps: torch.FloatTensor,
+    #         rejected_logps: torch.FloatTensor,
+    #         ref_chosen_logps: torch.FloatTensor,
+    #         ref_rejected_logps: torch.FloatTensor,
+    #     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    #     """
+    #     Compute the MMPO loss for a batch of policy and reference model log probabilities.
+
+    #     Args:
+    #         chosen_logps (`torch.FloatTensor`):
+    #             Log probabilities of the model for the chosen responses. Shape: `(batch_size,)`.
+    #         rejected_logps (`torch.FloatTensor`):
+    #             Log probabilities of the model for the rejected responses. Shape: `(batch_size,)`.
+    #         ref_chosen_logps (`torch.FloatTensor`):
+    #             Log probabilities of the reference model for the chosen responses. Shape: `(batch_size,)`.
+    #         ref_rejected_logps (`torch.FloatTensor`):
+    #             Log probabilities of the reference model for the rejected responses. Shape: `(batch_size,)`.
+
+    #     Returns:
+    #         A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`.
+    #         The losses tensor contains the DPO loss for each example in the batch.
+    #         The `chosen_rewards` and `rejected_rewards` tensors contain the rewards for the chosen and rejected
+    #         responses, respectively.
+    #         The Relu loss.
+    #     """
+    #     device = self.accelerator.device
+
+    #     chosen_logps = chosen_logps.to(device)
+    #     ref_chosen_logps = ref_chosen_logps.to(device)
+    #     rejected_logps = rejected_logps.to(device)
+    #     ref_rejected_logps = ref_rejected_logps.to(device)
+
+    #     # chosen_ratio = ref_chosen_logps - chosen_logps
+    #     # rejected_ratio = ref_rejected_logps - rejected_logps
+        
+    #     # chosen_ratio_exp = torch.exp(chosen_ratio)
+    #     # rejected_ratio_exp = torch.exp(rejected_ratio)
+
+    #     # chosen_rewards = self.mmpo_reward_epsilon + self.beta * (1 + chosen_ratio - chosen_ratio_exp)
+    #     # rejected_rewards = 0.1 + self.beta * (1 + rejected_ratio - rejected_ratio_exp)
+        
+    #     chosen_rewards = self.mmpo_reward_epsilon - self.beta * (chosen_logps - ref_chosen_logps)
+    #     rejected_rewards = 0.1 - self.beta * (rejected_logps - ref_rejected_logps)
+
+    #     chosen_scores = (chosen_logps + chosen_rewards).detach()
+    #     rejected_scores = (rejected_logps + rejected_rewards).detach()
+
+    #     coeff = F.sigmoid(chosen_scores - rejected_scores)
+    #     losses = coeff * (1 - self.beta) * rejected_logps
+    #     losses += -(coeff + 1.0) * (1 - self.beta) * chosen_logps
+        
+    #     # keep the code the same.
+    #     relu_losses = losses - losses
+    #     decoding_chosen_rewards = chosen_logps.detach()
+    #     decoding_rejected_rewards = rejected_logps.detach()
+    #     return losses, decoding_chosen_rewards, decoding_rejected_rewards, relu_losses
 
     # def mmpo_loss(
     #         self,
@@ -1548,7 +1597,19 @@ class DPOTrainer(Trainer):
         else:
             ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
 
-        if self.objective_type == "dpo":
+
+        if self.objective_type == "mmpo_dpo":
+            dpo_losses, dpo_chosen_rewards, dpo_rejected_rewards = self.dpo_loss(
+                model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
+            )
+            mmpo_losses, mmpo_chosen_rewards, mmpo_rejected_rewards, _ = self.mmpo_loss(
+                model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
+            )
+            losses = 100 * dpo_losses + mmpo_losses
+            chosen_rewards = (mmpo_chosen_rewards + dpo_chosen_rewards) / 2.0
+            rejected_rewards = (mmpo_rejected_rewards + dpo_rejected_rewards) / 2.0
+
+        elif self.objective_type == "dpo":
             losses, chosen_rewards, rejected_rewards = self.dpo_loss(
                 model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
             )

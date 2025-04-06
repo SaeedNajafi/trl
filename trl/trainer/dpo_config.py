@@ -311,6 +311,7 @@ class DPOConfig(TrainingArguments):
                 "simpo",
                 "sft",
                 "mmpo",
+                "mmpo_dpo"
             ],
         },
     )
