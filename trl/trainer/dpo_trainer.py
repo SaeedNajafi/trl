@@ -956,8 +956,8 @@ class DPOTrainer(Trainer):
         chosen_rewards = self.mmpo_reward_epsilon - self.beta * (chosen_logps - ref_chosen_logps)
         rejected_rewards = 0.1 - self.beta * (rejected_logps - ref_rejected_logps)
 
-        chosen_scores = chosen_logps + chosen_rewards
-        rejected_scores = rejected_logps + rejected_rewards
+        chosen_scores = chosen_logps + chosen_rewards.detach()
+        rejected_scores = rejected_logps + rejected_rewards.detach()
 
         scores = torch.cat((chosen_scores.unsqueeze(1), rejected_scores.unsqueeze(1)), dim=1)
         losses = -torch.logsumexp(scores, dim=1)
