@@ -376,6 +376,37 @@ class DPOConfig(TrainingArguments):
         },
     )
 
+    objective_type: str = field(
+        default="dpo",
+        metadata={
+            "help": "Type of objective to use for offline preference optimization.",
+            "choices": [
+                "dpo",
+                "simpo",
+                "mmpo",
+            ],
+        },
+    )
+
+    average_logps: str = field(default="no")
+    beta: float = field(
+        default=0.1,
+        metadata={
+            "help": "Parameter controlling the deviation from the reference model. "
+            "Higher β means less deviation from the reference model."
+        },
+    )
+    gamma_beta_ratio: float = field(
+        default=0.1,
+        metadata={
+            "help": "Gamma beta ratio used for SimPO."
+        },
+    )
+    mmpo_reward_epsilon: float = field(
+        default=1.0,
+        metadata={"help": "epsilon as the chosen text reward."},
+    )
+
     # Parameters that control the logging
     generate_during_eval: bool = field(
         default=False,
