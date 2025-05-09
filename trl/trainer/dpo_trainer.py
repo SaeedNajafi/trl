@@ -21,6 +21,8 @@ from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional, Union
+import math
+
 
 import pandas as pd
 import torch
@@ -70,6 +72,7 @@ from .utils import (
     peft_module_casting_to_bf16,
     selective_log_softmax,
 )
+from torch.distributions import Categorical
 
 
 if is_peft_available():
@@ -890,6 +893,54 @@ class DPOTrainer(Trainer):
 
         return output
 
+    # def mmpo_loss(
+    #     self,
+    #     chosen_logps: torch.FloatTensor,
+    #     rejected_logps: torch.FloatTensor,
+    #     ref_chosen_logps: torch.FloatTensor,
+    #     ref_rejected_logps: torch.FloatTensor,
+    # ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    #     """
+    #     Compute the MMPO loss for a batch of policy and reference model log probabilities.
+
+    #     Args:
+    #         chosen_logps (`torch.FloatTensor`):
+    #             Log probabilities of the model for the chosen responses. Shape: `(batch_size,)`.
+    #         rejected_logps (`torch.FloatTensor`):
+    #             Log probabilities of the model for the rejected responses. Shape: `(batch_size,)`.
+    #         ref_chosen_logps (`torch.FloatTensor`):
+    #             Log probabilities of the reference model for the chosen responses. Shape: `(batch_size,)`.
+    #         ref_rejected_logps (`torch.FloatTensor`):
+    #             Log probabilities of the reference model for the rejected responses. Shape: `(batch_size,)`.
+
+    #     Returns:
+    #         A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`.
+    #         The losses tensor contains the DPO loss for each example in the batch.
+    #         The `chosen_rewards` and `rejected_rewards` tensors contain the rewards for the chosen and rejected
+    #         responses, respectively.
+    #         The Relu loss.
+    #     """
+    #     device = self.accelerator.device
+
+    #     chosen_logps = chosen_logps.to(device)
+    #     ref_chosen_logps = ref_chosen_logps.to(device)
+    #     rejected_logps = rejected_logps.to(device)
+    #     ref_rejected_logps = ref_rejected_logps.to(device)
+
+    #     chosen_rewards = self.mmpo_reward_epsilon - self.beta * (chosen_logps - ref_chosen_logps)
+    #     rejected_rewards = 0.1 - self.beta * (rejected_logps - ref_rejected_logps)
+
+    #     chosen_scores = chosen_logps + chosen_rewards.detach()
+    #     rejected_scores = rejected_logps + rejected_rewards.detach()
+
+    #     scores = torch.cat((chosen_scores.unsqueeze(1), rejected_scores.unsqueeze(1)), dim=1)
+    #     losses = -torch.logsumexp(scores, dim=1)
+
+    #     decoding_chosen_rewards = chosen_logps.detach()
+    #     decoding_rejected_rewards = rejected_logps.detach()
+    #     return losses, decoding_chosen_rewards, decoding_rejected_rewards
+
+
     def mmpo_loss(
         self,
         chosen_logps: torch.FloatTensor,
@@ -923,12 +974,18 @@ class DPOTrainer(Trainer):
         ref_chosen_logps = ref_chosen_logps.to(device)
         rejected_logps = rejected_logps.to(device)
         ref_rejected_logps = ref_rejected_logps.to(device)
+ 
+        chosen_rewards = math.log(self.mmpo_reward_epsilon) + self.beta * (torch.relu(ref_chosen_logps - ref_rejected_logps) + ref_rejected_logps)
+        rejected_rewards = math.log(0.1) + self.beta * ref_rejected_logps
 
-        chosen_rewards = self.mmpo_reward_epsilon - self.beta * (chosen_logps - ref_chosen_logps)
-        rejected_rewards = 0.1 - self.beta * (rejected_logps - ref_rejected_logps)
+        all_rewards = torch.cat((chosen_rewards, rejected_rewards), dim=0)
+        min = all_rewards.min()
+        max = all_rewards.max()
+        normalized_chosen_rewards = (chosen_rewards + 1e-12 - min) / (max - min + 1e-12)
+        normalized_rejected_rewards = (rejected_rewards + 1e-12 - min) / (max - min + 1e-12)
 
-        chosen_scores = chosen_logps + chosen_rewards.detach()
-        rejected_scores = rejected_logps + rejected_rewards.detach()
+        chosen_scores = chosen_logps + normalized_chosen_rewards.detach()
+        rejected_scores = rejected_logps + normalized_rejected_rewards.detach()
 
         scores = torch.cat((chosen_scores.unsqueeze(1), rejected_scores.unsqueeze(1)), dim=1)
         losses = -torch.logsumexp(scores, dim=1)
@@ -936,6 +993,7 @@ class DPOTrainer(Trainer):
         decoding_chosen_rewards = chosen_logps.detach()
         decoding_rejected_rewards = rejected_logps.detach()
         return losses, decoding_chosen_rewards, decoding_rejected_rewards
+
 
     def simpo_loss(
         self,
@@ -1215,7 +1273,20 @@ class DPOTrainer(Trainer):
             # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
             #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
             attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
-
+            
+            
+            # print("before:", loss_mask.sum(-1), num_examples)
+            # non_zero_indices = torch.nonzero((loss_mask.sum(-1) != 0).int()).squeeze(1)
+            # expanded_indices = non_zero_indices.unsqueeze(-1).expand(-1, input_ids.shape[1])
+            # input_ids = torch.gather(input_ids, 0, expanded_indices)
+            # attention_mask = torch.gather(attention_mask, 0, expanded_indices)
+            # loss_mask = torch.gather(loss_mask, 0, expanded_indices)
+            # # print("after:", loss_mask.sum(-1), input_ids.shape[0] // 2)
+            # num_examples = input_ids.shape[0] // 2
+                    
+            
+            # Length for some of the inputs is zero. Let's ignore these examples.
+            
             # Truncate right
             if self.max_length is not None:
                 if self.truncation_mode == "keep_end":
@@ -1279,7 +1350,6 @@ class DPOTrainer(Trainer):
         per_token_logps = selective_log_softmax(logits, labels)
         per_token_logps[~loss_mask] = 0
         per_token_logps = torch.roll(per_token_logps, shifts=1, dims=1)
-
         if self.padding_free:
             # Unflatten the per_token_logps (shape: [1, sum_seq_len] -> [batch_size, seq_len])
             batch_size, seq_len = attention_mask.shape
@@ -1290,6 +1360,7 @@ class DPOTrainer(Trainer):
             per_token_logps = per_token_logps_
 
         all_logps = per_token_logps.sum(-1)
+
 
         output = {}
 
@@ -1314,8 +1385,21 @@ class DPOTrainer(Trainer):
                 torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=0
             )
 
+        if self.objective_type == "mmpo":
+            distributions = Categorical(logits=logits)
+            entropies = distributions.entropy()
+            entropies[~torch.roll(loss_mask, shifts=1, dims=1)] = 0.0
+            prefix_log_ps = torch.cumsum(per_token_logps, dim=1)
+            shifted_prefix_log_ps = torch.roll(prefix_log_ps, shifts=1, dims=1)
+            shifted_prefix_log_ps[:, 0] = 1.0
+            entropy_objective = torch.sum(shifted_prefix_log_ps * entropies.detach() + entropies, dim=1)
+            if self.average_logps == "yes":
+                # Perform length normalization for the entropy.
+                entropy_objective = entropy_objective / (loss_mask.sum(-1) + 1.0)
+            output["entropy_loss"] = -entropy_objective
+
         if self.loss_type == "ipo" or self.average_logps == "yes":
-            all_logps = all_logps / loss_mask.sum(-1)
+            all_logps = all_logps / (loss_mask.sum(-1) + 1.0)
 
         output["chosen_logps"] = all_logps[:num_examples]
         output["rejected_logps"] = all_logps[num_examples:]
@@ -1364,9 +1448,10 @@ class DPOTrainer(Trainer):
                 model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
             )
         elif self.objective_type == "mmpo":
-            losses, chosen_rewards, rejected_rewards, relu_losses = self.mmpo_loss(
+            losses, chosen_rewards, rejected_rewards = self.mmpo_loss(
                 model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
             )
+
         elif self.objective_type == "simpo":
             losses, chosen_rewards, rejected_rewards = self.simpo_loss(
                 model_output["chosen_logps"], model_output["rejected_logps"]
@@ -1410,8 +1495,16 @@ class DPOTrainer(Trainer):
             metrics[f"{prefix}aux_loss"] = (
                 self.accelerator.gather_for_metrics(model_output["aux_loss"]).detach().mean().item()
             )
+        if self.objective_type == "mmpo":
+            metrics[f"{prefix}entropy_loss"] = (
+                self.accelerator.gather_for_metrics(self.beta * model_output["entropy_loss"]).detach().mean().item()
+            )
 
-        return losses.mean(), metrics
+        final_loss = losses.mean()
+        if self.objective_type == "mmpo":
+            final_loss += self.beta * model_output["entropy_loss"].mean()
+
+        return final_loss, metrics
 
     def compute_loss(
         self,
